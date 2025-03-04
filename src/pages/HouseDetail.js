@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Card,
@@ -9,7 +9,6 @@ import {
   Divider,
   Form,
   Input,
-  InputNumber,
   Rate,
   List,
   Avatar,
@@ -25,10 +24,73 @@ import {
   ArrowLeftOutlined,
   UserOutlined
 } from '@ant-design/icons';
+import AMapLoader from '@amap/amap-jsapi-loader';  // 与 MapPicker 中相同
 import { houseAPI, commentAPI, favoriteAPI } from '../services/api';
 
 const { TextArea } = Input;
 const { Text } = Typography;
+
+/**
+ * 小地图展示组件，只读显示一个Marker
+ * @param {number} props.latitude  房源纬度
+ * @param {number} props.longitude 房源经度
+ */
+function HouseLocationMap({ latitude, longitude }) {
+  const mapRef = useRef(null); // div容器引用
+  const [map, setMap] = useState(null);
+
+  useEffect(() => {
+    // 组件挂载后初始化地图
+    if (!mapRef.current || latitude == null || longitude == null) {
+      return;
+    }
+
+    // 设置高德安全密钥
+    window._AMapSecurityConfig = {
+      securityJsCode: '1fe28e7d966cede3327b6df714d9181d',
+    };
+
+    // 加载高德地图
+    AMapLoader.load({
+      key: 'f698b513de16a7c5663084a015dc10f3', // 和项目中的 MapPicker 一致
+      version: '2.0',
+      plugins: ['AMap.Marker']
+    })
+      .then((AMap) => {
+        // 初始化地图
+        const mapInstance = new AMap.Map(mapRef.current, {
+          resizeEnable: true,
+          center: [longitude, latitude],
+          zoom: 15, // 可以根据需要设置 zoom
+        });
+        setMap(mapInstance);
+
+        // 放置一个 Marker
+        new AMap.Marker({
+          position: [longitude, latitude],
+          map: mapInstance,
+          draggable: false, // 只读，不允许拖动
+        });
+      })
+      .catch((e) => {
+        message.error('地图初始化失败：' + e.message);
+      });
+
+    // 卸载时，销毁地图实例
+    return () => {
+      if (map) {
+        map.destroy();
+      }
+    };
+  }, [latitude, longitude]);
+
+  return (
+    <div
+      ref={mapRef}
+      style={{ width: '100%', height: '300px' }}
+    />
+  );
+}
 
 const HouseDetail = () => {
   const { id } = useParams();
@@ -59,7 +121,7 @@ const HouseDetail = () => {
   const fetchComments = async () => {
     try {
       const response = await commentAPI.getComments(id);
-      setComments(response.data);
+      setComments(response.data.info);
     } catch (error) {
       message.error('获取评论失败');
     }
@@ -108,6 +170,20 @@ const HouseDetail = () => {
     return <div>房源不存在</div>;
   }
 
+   // 删除评论
+   const handleDeleteComment = async (commentId) => {
+    try {
+      // 调用你在 api.js 中写好的接口函数
+      await commentAPI.deleteComment(id, commentId);
+      message.success('删除成功');
+      // 再次刷新评论列表
+      fetchComments();
+    } catch (error) {
+      // 如果后端返回 403 或其他错误信息，你可以在这里给用户提示
+      message.error(error.response?.data?.msg || '删除失败');
+    }
+  };
+
   return (
     <div>
       <Button
@@ -141,7 +217,7 @@ const HouseDetail = () => {
           </div>
         )}
 
-        <Descriptions bordered>
+        <Descriptions bordered column={2}>
           <Descriptions.Item label="价格">
             <Tag color="red" icon={<DollarOutlined />}>
               ¥{Number(house.price).toLocaleString()}
@@ -159,17 +235,17 @@ const HouseDetail = () => {
               {`${house.province} ${house.city} ${house.district} ${house.address}`}
             </Space>
           </Descriptions.Item>
-          <Descriptions.Item label="经纬度">
-            {`(${house.latitude}, ${house.longitude})`}
-          </Descriptions.Item>
+          {/* 这里删除了显示经纬度的内容 */}
           <Descriptions.Item label="状态">
-            <Tag color={
-              house.status === 'available'
-                ? 'green'
-                : house.status === 'reserved'
-                ? 'orange'
-                : 'red'
-            }>
+            <Tag
+              color={
+                house.status === 'available'
+                  ? 'green'
+                  : house.status === 'reserved'
+                  ? 'orange'
+                  : 'red'
+              }
+            >
               {house.status === 'available'
                 ? '可售'
                 : house.status === 'reserved'
@@ -177,19 +253,20 @@ const HouseDetail = () => {
                 : '已售出'}
             </Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="描述">
-            {house.description}
-          </Descriptions.Item>
-          <Descriptions.Item label="浏览次数">
-            {house.views_count}
-          </Descriptions.Item>
-          <Descriptions.Item label="收藏次数">
-            {house.favorites_count}
-          </Descriptions.Item>
+          <Descriptions.Item label="描述">{house.description}</Descriptions.Item>
+          <Descriptions.Item label="浏览次数">{house.views_count}</Descriptions.Item>
+          <Descriptions.Item label="收藏次数">{house.favorites_count}</Descriptions.Item>
           <Descriptions.Item label="平均评分">
             {house.avg_rating ? house.avg_rating : '暂无'}
           </Descriptions.Item>
         </Descriptions>
+
+        {/* 地图显示房源位置 */}
+        <Divider orientation="left">房源位置</Divider>
+        <HouseLocationMap
+          latitude={house.latitude}
+          longitude={house.longitude}
+        />
 
         <Divider orientation="left">房源评价</Divider>
 
@@ -220,7 +297,13 @@ const HouseDetail = () => {
           itemLayout="horizontal"
           dataSource={comments}
           renderItem={item => (
-            <List.Item>
+            <List.Item 
+              key={item.id} 
+              actions={[
+              <Button danger onClick={() => handleDeleteComment(item.id)}>
+                删除评论
+              </Button>,
+            ]}>
               <List.Item.Meta
                 avatar={<Avatar icon={<UserOutlined />} />}
                 title={
