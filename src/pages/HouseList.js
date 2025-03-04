@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Card, Button, Input, Space, Modal, Form, InputNumber, Select, message } from 'antd';
-import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined ,EnvironmentOutlined} from '@ant-design/icons';
 import { houseAPI } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import AreaCascader from '../services/AreaCascader';
-
+// 引入我们封装的MapPicker
+import MapPicker from '../components/MapPicker';
 const { Option } = Select;
 
 const HouseList = () => {
@@ -15,10 +16,12 @@ const HouseList = () => {
   const [pageSize, setPageSize] = useState(10);
   const [searchText, setSearchText] = useState('');
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [showMap, setShowMap] = useState(false);        // 控制MapPicker可见性
   const [editingHouse, setEditingHouse] = useState(null);
   const [form] = Form.useForm();
   const navigate = useNavigate();
-
+  // 用来给 MapPicker 传的默认中心点
+  const [mapDefaultPosition, setMapDefaultPosition] = useState(null);
   useEffect(() => {
     fetchHouses();
   }, [currentPage, pageSize, searchText]);
@@ -65,33 +68,67 @@ const HouseList = () => {
     }
   };
 
-  const handleModalOk = async () => {
-    try {
-      const values = await form.validateFields();
-      console.log(values.location)
-      // 将 Cascader 返回的数组拆分成 province、city、district
-      if (values.location) {
-        values.province = values.location[0];
-        values.city = values.location[1];
-        values.district = values.location[2];
+    // “新增房源” or “编辑房源”的Modal点击“确定”时
+    const handleModalOk = async () => {
+      try {
+        const values = await form.validateFields();
+        // 将 location(省市区) 拆分后替换
+        if (values.location) {
+          const [province, city, district] = values.location;
+          values.province = province;
+          values.city = city;
+          values.district = district;
+        }
+        delete values.location;
+  
+        if (editingHouse) {
+          // 编辑房源
+          await houseAPI.updateHouse(editingHouse.id, values);
+          message.success('更新成功');
+        } else {
+          // 新增房源
+          await houseAPI.createHouse(values);
+          message.success('创建成功');
+        }
+        setIsModalVisible(false);
+        fetchHouses();
+      } catch (error) {
+        message.error('操作失败');
       }
-      delete values.location;
+    };
+      // 点击“地图选点”按钮
+  const handleOpenMap = () => {
+    // 先从表单拿到当前填写的省市区或经纬度
+    const values = form.getFieldsValue();
 
-      console.log(values);
-      if (editingHouse) {
-        await houseAPI.updateHouse(editingHouse.id, values);
-        message.success('更新成功');
-      } else {
-        await houseAPI.createHouse(values);
-        message.success('创建成功');
-      }
-      setIsModalVisible(false);
-      fetchHouses();
-    } catch (error) {
-      message.error('操作失败');
+    if (values.longitude && values.latitude) {
+      // 如果已有经纬度，直接用
+      setMapDefaultPosition([values.longitude, values.latitude]);
+    } else if (values.location && values.location.length === 3) {
+      console.log(values.location[0])
+      // 如果没经纬度，但有省市区，就把它当对象传过去
+      // 让 MapPicker 里做地理编码
+      setMapDefaultPosition({
+        province: values.location[0],
+        city: values.location[1],
+        district: values.location[2],
+      });
+    } else {
+      // 都没有，就给一个默认坐标（例如天安门）
+      setMapDefaultPosition([116.397428, 39.90923]);
     }
-  };
 
+    // 打开地图弹窗
+    setShowMap(true);
+  };
+  // 当MapPicker用户选好了点后执行
+  const handlePickLocation = ({ longitude, latitude }) => {
+    // 把选中的经纬度回填进表单
+    form.setFieldsValue({
+      longitude,
+      latitude,
+    });
+  };
 
   const columns = [
     {
@@ -281,6 +318,15 @@ const HouseList = () => {
           >
             <InputNumber style={{ width: '100%' }} step={0.000001} />
           </Form.Item>
+          {/* “地图选点”按钮 */}
+          <Button 
+            icon={<EnvironmentOutlined />}
+            onClick={handleOpenMap}
+          >
+            地图选点
+          </Button>
+
+
           <Form.Item name="image_url" label="房源图片URL">
             <Input />
           </Form.Item>
@@ -300,6 +346,15 @@ const HouseList = () => {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* 地图选点组件弹窗 */}
+      <MapPicker
+        visible={showMap}
+        onClose={() => setShowMap(false)}
+        // 如果是编辑房源，就让地图初始在该房源的经纬度，否则默认天安门
+        defaultPosition={mapDefaultPosition} // 这里会是 [lng, lat] 或 { province, city, district }
+        onPick={handlePickLocation}
+      />
     </div>
   );
 };
